@@ -1,0 +1,91 @@
+stages: # List of stages for jobs, and their order of execution
+  - analyze
+  - test
+  - coverage
+
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+  GIT_SUBMODULE_UPDATE_FLAGS: --jobs 4
+
+default:
+  image: cirrusci/flutter:latest
+
+cache:
+  paths:
+    - /flutter/bin/cache/dart-sdk
+
+code_quality:
+  stage: analyze
+  before_script:
+    - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/technixo/flavorizr".insteadOf "git@gitlab.com:technixo/flavorizr.git"
+    - git submodule sync && git submodule update --init
+    - export PATH="$PATH":"$HOME/.pub-cache/bin"
+    - pub global activate dart_code_metrics
+  script:
+    - flutter analyze
+    - flutter pub global run dart_code_metrics:metrics analyze lib --reporter=json > gl-code-quality-report.json
+    # - metrics lib -r codeclimate  > gl-code-quality-report.json
+  artifacts:
+    reports:
+      codequality: gl-code-quality-report.json
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH == "master"
+    - if: $CI_COMMIT_BRANCH == "develop" && $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_COMMIT_BRANCH == "develop" && $CI_PIPELINE_SOURCE == "merge_request_event"
+      allow_failure: true
+
+test-all:
+  stage: test
+  before_script:
+    - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/technixo/flavorizr".insteadOf "git@gitlab.com:technixo/flavorizr.git"
+    - git submodule sync && git submodule update --init
+  script:
+    - export PATH="$PATH":"$HOME/.pub-cache/bin"
+    - pub global activate junitreport
+    - flutter test --machine --coverage | tojunit -o report.xml
+  only:
+    refs:
+      - main
+      - master
+      - develop
+  artifacts:
+    paths:
+      - coverage
+    reports:
+      junit: report.xml
+
+coverage: # This job runs in the test stage.
+  stage: coverage # It only starts when the job in the build stage completes successfully.
+  script:
+    - lcov --summary coverage/lcov.info
+    - lcov --remove coverage/lcov.info
+      "lib/config/*"
+      "lib/application/l10n/l10n.dart"
+      "lib/application/l10n/**/*"
+      "lib/domain/repositories/*"
+      "lib/injection.config.dart"
+      "lib/presentation/routes/*"
+      "lib/infrastructure/repositories/firebase_injectable_module.dart"
+      "**/mock_*.dart"
+      "**/*.g.dart"
+      "**/*.gr.dart"
+      "**/*.freezed.dart"
+      "**/*.mocks.dart"
+      "**/*.config.dart"
+      -o coverage/clean_lcov.info
+    - genhtml coverage/clean_lcov.info --output=coverage
+    - curl -Os https://uploader.codecov.io/latest/linux/codecov
+    - chmod +x codecov
+    - ./codecov -t $CODECOV_TOKEN
+    - mv coverage/ public/
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH == "master"
+    - if: $CI_COMMIT_BRANCH == "develop" && $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_COMMIT_BRANCH == "develop" && $CI_PIPELINE_SOURCE == "merge_request_event"
+
+  coverage: '/lines\.*: \d+\.\d+\%/'
+  artifacts:
+    paths:
+      - public
